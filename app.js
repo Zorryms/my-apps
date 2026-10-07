@@ -2,6 +2,8 @@
 const $ = id => document.getElementById(id);
 const labels = {want:'Хочу прочитати', reading:'Читаю', read:'Прочитано'};
 let client, user, books = [], shelf = 'all', editing = null, cover = '', imageBusy = false, busy = false, loadSequence = 0;
+const defaultCategories=['Художня література та класика','Психологія, філософія, саморозвиток','Наука та мислення','Бізнес, економіка, розвиток','Фентезі та пригоди','Інше'];
+let view='large'; try { const saved=localStorage.getItem('my-library-view'); if(['large','compact','text'].includes(saved)) view=saved; } catch {}
 let toastTimer;
 function toast(message) { $('toast').textContent = message; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 5500); }
 function el(tag, text, className) { const e = document.createElement(tag); if(text !== undefined) e.textContent = text; if(className) e.className = className; return e; }
@@ -20,26 +22,32 @@ async function loadBooks() {
 function render() {
  const active = books.filter(b=>!b.deleted_at); $('total').textContent = active.length;
  for(const button of $('shelves').children) { const key=button.dataset.shelf; button.setAttribute('aria-pressed',String(key===shelf)); button.querySelector('span').textContent = key==='trash' ? books.filter(b=>b.deleted_at).length : key==='all' ? active.length : active.filter(b=>b.shelf===key).length; }
+ const category=$('categoryFilter').value;
+ const categories=[...new Set([...defaultCategories,...books.map(b=>b.category||'').filter(Boolean)])].sort((a,b)=>a.localeCompare(b,'uk'));
+ $('categoryFilter').replaceChildren();
+ for(const [value,label] of [['','Усі категорії'],['__none','Без категорії'],...categories.map(c=>[c,c])]){const option=el('option',label);option.value=value;$('categoryFilter').append(option);}
+ $('categoryFilter').value=category; $('categoryOptions').replaceChildren(...categories.map(c=>{const option=el('option');option.value=c;return option;}));
+ $('books').dataset.view=view; for(const button of $('viewModes').children)button.setAttribute('aria-pressed',String(button.dataset.view===view));
  const q=$('search').value.trim().toLocaleLowerCase('uk');
- const filtered=books.filter(b => (shelf==='trash' ? !!b.deleted_at : !b.deleted_at && (shelf==='all'||b.shelf===shelf)) && `${b.title} ${b.author} ${b.notes}`.toLocaleLowerCase('uk').includes(q));
+ const filtered=books.filter(b => (shelf==='trash' ? !!b.deleted_at : !b.deleted_at && (shelf==='all'||b.shelf===shelf)) && (!category||(category==='__none'?!b.category:b.category===category)) && `${b.title} ${b.author} ${b.notes} ${b.category||''}`.toLocaleLowerCase('uk').includes(q));
  const sort=$('sort').value; filtered.sort((a,b)=>sort==='new' ? b.created_at.localeCompare(a.created_at) : a[sort].localeCompare(b[sort],'uk'));
- $('books').replaceChildren();
+ $('resultCount').textContent='Показано: '+filtered.length; $('books').replaceChildren();
  for(const b of filtered) {
   const card=el('article',undefined,'book-card'); const open=el('button',undefined,'cover-button'); open.setAttribute('aria-label','Відкрити книгу '+b.title); open.onclick=()=>openEditor(b);
   const stage=el('div',undefined,'cover-stage');
   if(b.cover) { const img=el('img'); img.src=b.cover; img.alt='Обкладинка: '+b.title; img.loading='lazy'; stage.append(img); }
   else { const p=el('div',undefined,'book-placeholder'); const colors=['#82616e','#657c90','#bd8960','#827d5b','#a06353']; let hash=0; for(const c of b.id) hash+=c.charCodeAt(0); p.style.setProperty('--book-color',colors[hash%colors.length]); p.append(el('small',b.author||'МОЯ БІБЛІОТЕКА'),el('strong',b.title),el('span','✳','cover-symbol')); stage.append(p); }
-  open.append(stage); card.append(open,el('h3',b.title),el('p',b.author||'Автор не вказаний'));
+  open.append(stage); const info=el('div',undefined,'book-info');const heading=el('h3');const titleButton=el('button',b.title,'book-title');titleButton.onclick=()=>openEditor(b);heading.append(titleButton);info.append(heading,el('p',b.author||'Автор не вказаний'));if(b.category)info.append(el('span',b.category,'category-tag'));card.append(open,info);
   const bottom=el('div',undefined,'card-bottom');
   if(b.deleted_at) { const restore=el('button','↶ Відновити','quiet'); restore.onclick=()=>updateBook(b,{deleted_at:null},'Книгу повернуто на полицю'); bottom.append(restore); }
   else { const select=el('select'); select.setAttribute('aria-label','Полиця: '+b.title); for(const [value,name] of Object.entries(labels)) { const option=el('option',name); option.value=value; select.append(option); } select.value=b.shelf; select.onchange=async()=>{select.disabled=true; const ok=await updateBook(b,{shelf:select.value},'Книгу переміщено'); if(!ok) select.value=b.shelf; select.disabled=false;}; bottom.append(select); }
   if(b.rating) bottom.append(el('span','★'.repeat(b.rating),'stars')); card.append(bottom); $('books').append(card);
  }
- $('empty').hidden=filtered.length>0; $('emptyTitle').textContent=q?'Не знайшлося книги':shelf==='trash'?'Кошик порожній':'Твоя історія починається тут'; $('emptyText').textContent=q?'Спробуй іншу назву чи автора.':shelf==='trash'?'Видалені книги можна буде відновити звідси.':'Додай книгу або перемісти її на цю полицю.'; $('emptyAdd').hidden=!!q||shelf==='trash';
+ $('empty').hidden=filtered.length>0; $('emptyTitle').textContent=(q||category)?'Не знайшлося книги':shelf==='trash'?'Кошик порожній':'Твоя історія починається тут'; $('emptyText').textContent=(q||category)?'Спробуй іншу назву чи автора.':shelf==='trash'?'Видалені книги можна буде відновити звідси.':'Додай книгу або перемісти її на цю полицю.'; $('emptyAdd').hidden=!!q||shelf==='trash';
 }
 function previewCover() { $('coverPreview').replaceChildren(); if(cover) { const img=el('img'); img.src=cover; img.alt='Обрана обкладинка'; $('coverPreview').append(img); } else $('coverPreview').textContent='▤'; }
 function openEditor(book=null) {
- editing=book; cover=book?.cover||''; $('bookForm').reset(); $('editorTitle').textContent=book?'Твоя книга':'Нова книга'; $('bookTitle').value=book?.title||''; $('bookAuthor').value=book?.author||''; $('bookShelf').value=book?.shelf||(labels[shelf]?shelf:'want'); $('bookRating').value=book?.rating||0; $('bookUrl').value=book?.url||''; $('bookNotes').value=book?.notes||''; $('formError').textContent=''; $('trashBook').hidden=!book||!!book.deleted_at; $('saveBook').textContent=book?.deleted_at?'Відновити та зберегти':'Зберегти книгу'; $('visitBook').hidden=!safeUrl(book?.url); if(safeUrl(book?.url)) $('visitBook').href=safeUrl(book.url); previewCover(); $('editor').showModal();
+ editing=book; cover=book?.cover||''; $('bookForm').reset(); $('editorTitle').textContent=book?'Твоя книга':'Нова книга'; $('bookTitle').value=book?.title||''; $('bookAuthor').value=book?.author||''; $('bookCategory').value=book?(book.category||''):($('categoryFilter').value==='__none'?'':$('categoryFilter').value); $('bookShelf').value=book?.shelf||(labels[shelf]?shelf:'want'); $('bookRating').value=book?.rating||0; $('bookUrl').value=book?.url||''; $('bookNotes').value=book?.notes||''; $('formError').textContent=''; $('trashBook').hidden=!book||!!book.deleted_at; $('saveBook').textContent=book?.deleted_at?'Відновити та зберегти':'Зберегти книгу'; $('visitBook').hidden=!safeUrl(book?.url); if(safeUrl(book?.url)) $('visitBook').href=safeUrl(book.url); previewCover(); $('editor').showModal();
 }
 async function updateBook(book, changes, message) {
  try { const {data,error}=await client.from('books').update(changes).eq('id',book.id).eq('user_id',user.id).select().single(); if(error) throw error; books=books.map(b=>b.id===data.id?data:b); render(); toast(message); return true; } catch(error) {toast(errorText(error)); return false;}
@@ -49,7 +57,7 @@ $('bookForm').onsubmit=async event=>{
  event.preventDefault(); if(busy||imageBusy||!user) return; const title=$('bookTitle').value.trim(); if(!title){$('formError').textContent='Вкажи назву книги.';return;}
  const url=$('bookUrl').value.trim(); if(url&&!safeUrl(url)){$('formError').textContent='Посилання має починатися з https:// або http://.';return;}
  busy=true; $('saveBook').disabled=true; $('formError').textContent='';
- const record={title,author:$('bookAuthor').value.trim(),shelf:$('bookShelf').value,rating:Number($('bookRating').value),notes:$('bookNotes').value,url:safeUrl(url),cover,deleted_at:null};
+ const record={title,author:$('bookAuthor').value.trim(),category:$('bookCategory').value.trim(),shelf:$('bookShelf').value,rating:Number($('bookRating').value),notes:$('bookNotes').value,url:safeUrl(url),cover,deleted_at:null};
  try { let result; if(editing) result=await client.from('books').update(record).eq('id',editing.id).eq('user_id',user.id).select().single(); else result=await client.from('books').insert({...record,user_id:user.id}).select().single(); if(result.error) throw result.error; books=books.filter(b=>b.id!==result.data.id).concat(result.data); render(); $('editor').close(); toast('Книгу збережено й синхронізовано'); } catch(error) {$('formError').textContent=errorText(error);} finally {busy=false;$('saveBook').disabled=false;}
 };
 $('trashBook').onclick=async()=>{if(!editing||busy)return;busy=true; $('trashBook').disabled=true; try {if(await updateBook(editing,{deleted_at:new Date().toISOString()},'Книгу перенесено до кошика. Її можна відновити.'))$('editor').close();}finally{busy=false;$('trashBook').disabled=false;}};
@@ -60,6 +68,7 @@ $('coverFile').onchange=async()=>{
  try {const img=new Image();img.src=objectUrl;await img.decode(); if(img.width*img.height>50000000)throw new Error('size');const scale=Math.min(1,600/img.width,900/img.height);const canvas=document.createElement('canvas');canvas.width=Math.round(img.width*scale);canvas.height=Math.round(img.height*scale);const context=canvas.getContext('2d');context.fillStyle='#fff';context.fillRect(0,0,canvas.width,canvas.height);context.drawImage(img,0,0,canvas.width,canvas.height);const next=canvas.toDataURL('image/jpeg',.82);if(next.length>1000000)throw new Error('size');cover=next;previewCover();$('formError').textContent='';}catch{$('formError').textContent='Не вдалося прочитати зображення. Спробуй інший файл.';}finally{URL.revokeObjectURL(objectUrl);imageBusy=false;$('saveBook').disabled=false;}
 };
 $('removeCover').onclick=()=>{if(imageBusy)return;cover='';$('coverFile').value='';previewCover();};
+$('categoryFilter').onchange=render; $('viewModes').onclick=e=>{const button=e.target.closest('button[data-view]');if(button){view=button.dataset.view;try{localStorage.setItem('my-library-view',view);}catch{}render();}};
 $('search').oninput=render; $('sort').onchange=render; $('shelves').onclick=e=>{const b=e.target.closest('button[data-shelf]');if(b){shelf=b.dataset.shelf;render();}}; $('refresh').onclick=loadBooks;
 $('export').onclick=()=>{const blob=new Blob([JSON.stringify({format:'my-library',version:1,exported_at:new Date().toISOString(),books},null,2)],{type:'application/json'});const url=URL.createObjectURL(blob);const a=el('a');a.href=url;a.download='my-library-'+new Date().toISOString().slice(0,10)+'.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);toast('Резервну копію підготовлено для завантаження');};
 $('import').onclick=()=>$('backupFile').click();
@@ -67,7 +76,7 @@ $('backupFile').onchange=async()=>{
  const file=$('backupFile').files[0];if(!file||!user)return; $('import').disabled=true;
  try {if(file.size>50*1024*1024)throw new Error('format');const backup=JSON.parse(await file.text());if(backup.format!=='my-library'||backup.version!==1||!Array.isArray(backup.books)||backup.books.length>2000)throw new Error('format');
  const existing=new Set(books.map(b=>b.id)); const records=[];
- for(const b of backup.books){if(!b||typeof b.title!=='string'||!b.title.trim()||b.title.length>200||typeof b.author!=='string'||b.author.length>200||!Object.hasOwn(labels,b.shelf)||!Number.isInteger(b.rating)||b.rating<0||b.rating>5||typeof b.notes!=='string'||b.notes.length>20000||typeof b.cover!=='string'||b.cover.length>1000000||(b.cover&&!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(b.cover))||typeof b.url!=='string'||b.url.length>2000||(b.url&&!safeUrl(b.url)))throw new Error('format');if(existing.has(b.id))continue;const id=typeof b.id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(b.id)?b.id:crypto.randomUUID();existing.add(id);records.push({id,user_id:user.id,title:b.title.trim(),author:b.author,shelf:b.shelf,rating:b.rating,notes:b.notes,cover:b.cover,url:safeUrl(b.url),deleted_at:null});}
+ for(const b of backup.books){if(!b||(b.category!==undefined&&(typeof b.category!=='string'||b.category.length>120))||typeof b.title!=='string'||!b.title.trim()||b.title.length>200||typeof b.author!=='string'||b.author.length>200||!Object.hasOwn(labels,b.shelf)||!Number.isInteger(b.rating)||b.rating<0||b.rating>5||typeof b.notes!=='string'||b.notes.length>20000||typeof b.cover!=='string'||b.cover.length>1000000||(b.cover&&!/^data:image\/(jpeg|png|webp);base64,[A-Za-z0-9+/=]+$/.test(b.cover))||typeof b.url!=='string'||b.url.length>2000||(b.url&&!safeUrl(b.url)))throw new Error('format');if(existing.has(b.id))continue;const id=typeof b.id==='string'&&/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(b.id)?b.id:crypto.randomUUID();existing.add(id);records.push({id,user_id:user.id,title:b.title.trim(),author:b.author,category:b.category||'',shelf:b.shelf,rating:b.rating,notes:b.notes,cover:b.cover,url:safeUrl(b.url),deleted_at:null});}
  if(!records.length){toast('Усі ці книги вже є в бібліотеці. Нічого не змінено.');return;}
  const {error}=await client.from('books').insert(records);if(error)throw error;await loadBooks();toast('Додано книг: '+records.length+'. Наявні книги не змінено.');
  }catch(error){toast(error.message==='format'?'Це не коректна резервна копія бібліотеки (до 50 МБ).':errorText(error));}finally{$('import').disabled=false;$('backupFile').value='';}
